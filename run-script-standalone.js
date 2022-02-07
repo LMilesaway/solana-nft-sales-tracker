@@ -27,6 +27,9 @@ let outputType = overrides.outputType || 'console';;
 
 let config = JSON.parse(fs.readFileSync(configPath).toString());
 config = _.assignIn(config, overrides);
+
+
+
 let tracker = new SalesTracker(config, outputType);
 tracker.checkSales();
 
