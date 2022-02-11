@@ -1,4 +1,6 @@
 # Solana NFT Sales Tracker by cryptoSyndrome
+
+edit
 This repository contains code that can be used to run your own marketplace sales tracker for Solana NFTs. It relies on the concept of royalties being automatically credited to the creators and uses those transactions to identify sales. This ensures that the code is marketplace agnostic i.e as long as royalties are properly credited to the creator of the NFT, the transaction can be identified and parsed for necessary values.
 
 The codebase comes with a cron.js file which can be used to execute the tracking process at routine intervals - it uses a simple auditfile-*.json to track already processed transactions. (Can be replaced with a DB if you want to go that route)
