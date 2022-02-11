@@ -15,106 +15,72 @@ import _ from 'lodash';
 import axios from 'axios';
 import fs from 'fs';
 export default class SaleTracker {
-    constructor(config, outputType) {
+    constructor(config) {
         this.config = config;
         this.connection = new Connection(this.config.rpc);
-        this.auditFilePath = `./auditfile-${outputType}.json`;
-        this.outputType = outputType;
     }
+
     /**
      * The main function.
      */
+
     checkSales() {
         return __awaiter(this, void 0, void 0, function* () {
+            const sig_limit = 100;
             const me = this;
-            let lockFile = me._readOrCreateAuditFile();
-            let lastProcessedSignature = _.last(lockFile.processedSignatures);
-            console.log("Started");
-            const confirmedSignatures = _.reverse(yield this.connection.getConfirmedSignaturesForAddress2(new PublicKey(me.config.primaryRoyaltiesAccount), { limit: 1000, until: lastProcessedSignature }));
-            _.remove(confirmedSignatures, (tx) => {
-                return _.includes(lockFile.processedSignatures, tx.signature);
-            });
-            console.log("Got transactions", confirmedSignatures.length);
-            for (let confirmedSignature of confirmedSignatures) {
-                let saleInfo = yield me._parseTransactionForSaleInfo(confirmedSignature.signature);
-                if (saleInfo) {
-                    yield me._getOutputPlugin().send(saleInfo);
+            const confirmedSignatures = yield this.connection.getConfirmedSignaturesForAddress2(new PublicKey(me.config.primaryRoyaltiesAccount), { limit: sig_limit });
+
+            if (confirmedSignatures.length > 0) {
+                const file = confirmedSignatures[confirmedSignatures.length - 1].signature;
+
+
+                let batchSize = 10;
+                for (let i = 0; i < confirmedSignatures.length;) {
+                    let batch = [];
+
+                    for (let j = 0; j < batchSize && i < confirmedSignatures.length; i++, j++)
+
+                        batch.push( me._parseTransactionForSaleInfo(confirmedSignatures[i].signature));
+                    console.warn(`Running: ${i - batch.length} to ${i}`);
+                    Promise.all(batch);
+
                 }
 
-              
-                yield me._updateLockFile(confirmedSignature.signature);
-                console.log("Updated lockfile", confirmedSignature.signature);
+                return file
+            } else {
+                //  console.log("0 transactions")
+                return 0;
             }
-            console.log("Done");
         });
+
     }
-    /**
-     * A basic factory to return the output plugin.
-     * @returns
-     */
-    _getOutputPlugin() {
-        const me = this;
-        if (me.outputType === 'console') {
-            return {
-                send: function (saleInfo) {
-                    return __awaiter(this, void 0, void 0, function* () {
-                        console.log(JSON.stringify(saleInfo), null, 2);
-                    });
-                }
-            };
-        }
-        if (me.outputType === 'discord') {
-            return new DiscordHelper(me.config);
-        }
-        else {
-            return new TwitterHelper(me.config);
-        }
-    }
-    /**
-     * Returns a dummy audit file for first run.
-     * @returns
-     */
-    _getNewAuditFileStructure() {
-        return JSON.stringify({
-            processedSignatures: []
-        });
-    }
-    /**
-     * Returns the auditfile if it exists, if not createss a new empty one.
-     * @returns The contents of the auditfile.
-     */
-    _readOrCreateAuditFile() {
-        const me = this;
-        if (fs.existsSync(me.auditFilePath)) {
-            return JSON.parse(fs.readFileSync(me.auditFilePath).toString());
-        }
-        else {
-            fs.writeFileSync(me.auditFilePath, me._getNewAuditFileStructure());
-            return JSON.parse(fs.readFileSync(me.auditFilePath).toString());
-        }
-    }
-    /**
-     * Keeping it simple. Using a file to track processed signatures. Routinely trimming
-     * signatures from the file to keep size in check.
-     * Improvement: Use a database to store the processed file information - helpes with easier deployment since in the current scheme the lock file is part of the commit.
-     * @param signature
-     */
-    _updateLockFile(signature) {
+
+    checkSalesAfter(last) {
         return __awaiter(this, void 0, void 0, function* () {
+            const siglimit = 100;
             const me = this;
-            let file = me._readOrCreateAuditFile();
-            file.processedSignatures.push(signature);
-            if (file.processedSignatures.length > 300) {
-                file.processedSignatures = _.takeRight(file.processedSignatures, 10);
+
+            const confirmedSignatures = yield this.connection.getConfirmedSignaturesForAddress2(new PublicKey(me.config.primaryRoyaltiesAccount), { limit: siglimit, before: last/* until: lastProcessedSignature */ });
+            if (confirmedSignatures.length > 0) {
+                let txsig = confirmedSignatures[confirmedSignatures.length - 1].signature;
+                let batchSize = 10;
+                for (let i = 0; i < confirmedSignatures.length;) {
+                    let batch = [];
+                    for (let j = 0; j < batchSize && i < confirmedSignatures.length; i++, j++)
+                        batch.push( me._parseTransactionForSaleInfo(confirmedSignatures[i].signature));
+                    console.warn(`Running: ${i - batch.length} to ${i}`);
+                    Promise.all(batch);
+                }
+                console.log("hundred");
+                return txsig
+            } else {
+                //  console.log("0 transactions")
+                return 0;
             }
-            yield fs.writeFileSync(me.auditFilePath, JSON.stringify(file));
         });
+
     }
-    /**
-     * Gets the mint metadata using the metaplex helper classes.
-     * @param mintInfo
-     * @returns
-     */
+
     _getMintMetadata(mintInfo) {
         return __awaiter(this, void 0, void 0, function* () {
             const me = this;
@@ -122,56 +88,24 @@ export default class SaleTracker {
             return metadata;
         });
     }
-    /**
-     * Identifies the marketplace using the addresses asssociated with the transaction.
-     * The marketplaces have their own royalty addresses which are credited as part of the sale.
-     * @param addresses
-     * @returns
-     */ /*
-   _mapMarketPlace(addresses) {
-       const me = this;
-       let marketPlace = '';
-       _.forEach(me.config.marketPlaceInfos, (mpInfo) => {
-           if (_.size(_.intersection(addresses, mpInfo.addresses)) > 0) {
-               marketPlace = mpInfo.name;
-               return false;
-           }
-       });
-       return marketPlace;
-   } */
-    /**
-     * The amount debited from the buyer is the actual amount paid for the NFT.
-     * @param accountPostBalances - Map of account addresses and the balances post this transaction
-     * @param buyer - The buyer address
-     * @returns
-     */
+    
     _getSaleAmount(accountPostBalances, accountPreBalances, buyer) {
         return _.round(Math.abs(accountPostBalances[buyer] - accountPreBalances[buyer]) / Math.pow(10, 9), 2).toFixed(2);
     }
-    /**
-     * Some basic ways to avoid people sending fake transactions to our primaryRoyaltiesAccount in an attempt
-     * to appear on the sale bots result.
-     * @param mintMetadata
-     * @returns
-     */
+
     _verifyNFT(mintMetadata) {
         const me = this;
         let creators = _.map(mintMetadata.data.creators, 'address');
         let updateAuthority = _.get(mintMetadata, `updateAuthority`);
         return _.includes(creators, me.config.primaryRoyaltiesAccount) && updateAuthority === me.config.updateAuthority;
     }
-    /**
-     * Get the detailed transaction info, compute account balance changes, identify the marketplaces involved
-     * Get the sale amount, get the NFT information from the transaction and thenr retrieve the image from
-     * ARWeave.
-     * @param signature
-     * @returns saleInfo object
-     */
+
     _parseTransactionForSaleInfo(signature) {
         return __awaiter(this, void 0, void 0, function* () {
             const me = this;
             let transactionInfo = yield me.connection.getTransaction(signature);
 
+            console.log("this is a test 2");
 
             let accountKeys = transactionInfo === null || transactionInfo === void 0 ? void 0 : transactionInfo.transaction.message.accountKeys;
             let accountMap = [];
@@ -184,6 +118,7 @@ export default class SaleTracker {
             let allAddresses = _.values(accountMap);
             let buyer = accountMap[0];
             let { balanceDifferences, seller, mintInfo, saleAmount } = me._parseTransactionMeta(transactionInfo, accountMap, buyer, allAddresses);
+            if (mintInfo) {
             if (balanceDifferences && balanceDifferences[me.config.primaryRoyaltiesAccount] > 0 /* && !_.isEmpty(marketPlace)*/) {
                 let mintMetaData = yield me._getMintMetadata(mintInfo);
                 if (!me._verifyNFT(mintMetaData)) {
@@ -194,65 +129,38 @@ export default class SaleTracker {
                 let arWeaveInfo = yield axios.get(arWeaveUri);
 
 
-                
+
                 let user = {
-                   collection: _.get(mintMetaData, `data.name`),
-        
+                    collection: _.get(mintMetaData, `data.name`),
                     time:
                         transactionInfo === null || transactionInfo === void 0
                             ? void 0
                             : transactionInfo.blockTime,
-        
-                    /*marketPlace: me._mapMarketPlace(allAddresses),*/
                     saleAmount: saleAmount,
                     Signature: signature
                 };
                 if (user.saleAmount != 0) {
-                    // convert JSON object to string
                     const data = JSON.stringify(user);
-                   // const Signature = JSON.stringify(SIG);
-        
-                    // write JSON string to a file
-                    fs.appendFile("sigs.json", `${data}   ,`, (err) => {
+                    fs.appendFile("sigs.json", `${data}, \n`, (err) => {
                         if (err) {
                             throw err;
                         }
-                        console.log("JSON data is saved.");
                     });
                 }
-
-
-
-                return {
-                    time: transactionInfo === null || transactionInfo === void 0 ? void 0 : transactionInfo.blockTime,
-                    txSignature: signature,
-                    /* marketPlace: marketPlace ? marketPlace : 'Unknown', */
-                    buyer,
-                    seller,
-                    saleAmount,
-                    nftInfo: {
-                        id: _.get(mintMetaData, `data.name`),
-                        name: _.get(mintMetaData, `data.name`),
-                        image: arWeaveInfo.data.image
-                    }
-                };
+            }
             }
         });
     }
-    /**
-     * Some rudimentary logic to compute account balance changes. Assumes that the
-     * account which is credited the largest amount is the account of the seller.
-     * @param transactionInfo
-     * @param accountMap
-     * @param buyer
-     * @param allAddresses
-     * @returns
-     */
     _parseTransactionMeta(transactionInfo, accountMap, buyer, allAddresses) {
-        
+
+        console.log("this is a test 3");
+
+
         const me = this;
-        
+
+        if (transactionInfo) {
         let txMetadata = transactionInfo.meta, mintInfo = _.get(txMetadata, `postTokenBalances.0.mint`), balanceDifferences = {}, seller = '';
+        // console.log('Mint info',mintInfo);
         let accountPreBalances = {};
         let accountPostBalances = {};
         _.forEach(txMetadata.preBalances, (balance, index) => {
@@ -270,9 +178,6 @@ export default class SaleTracker {
                 largestBalanceIncrease = balanceIncrease;
             }
         });
-        
-
-        
         return {
             accountPreBalances,
             accountPostBalances,
@@ -282,5 +187,10 @@ export default class SaleTracker {
             //marketPlace: me._mapMarketPlace(allAddresses),
             saleAmount: me._getSaleAmount(accountPostBalances, accountPreBalances, buyer)
         };
+    } else{
+    console.log("transaction info null!");
+    return 0;
     }
 }
+}
+
